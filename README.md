@@ -4,5 +4,5 @@ This project was made using Python and Quarto.
 The project is a toy-model and example of a stock market analysis of European semiconductor companies stock markets, 
 including technical indicator analysis, statistical checks and time series forecasting.
 
-The .html file features all of the output for visualization.
+The .html file features all of the output for visualization. It's a large file, so loading/rendering it might take a while depending on your browser.
 The .qmd file is the Quarto source file.
