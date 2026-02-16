@@ -1,0 +1,474 @@
+---
+title: "Semiconductor EU stocks"
+format:
+  html:
+    code-fold: true
+    toc: true
+    toc-depth: 10
+    fig-sub-caption: false
+jupyter: python3
+---
+# Overview 
+
+This project analyzes the stock markets of major European semiconductor companies. 
+The goal of the project is to retrive financial data from yfinance and use it to forecast stock markets of the companies with time series analysis and machine learning. The results can be applied to trading and finacial decisionmaking. Note that this project itself does not provide such decisionmaking. It serves only as a general analysis and guideline. 
+
+Initially this project also featured an attempt at forecasting stock close prices with a hybrid LSTM-ARIMA model (inspired by [this paper](https://arxiv.org/abs/2406.18206)), but after many failed attempts, it was scrapped. The original paper doesn't use the model for time series forecast, but instead for trend and buy/sell signal detection. There are many other examples of LSTM being used for stock data forecast, but for a very volatile market, it might not be the best fit.
+
+## Data cleansing
+```{python}
+import yfinance as yf
+import random
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import seaborn as sns
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+import plotly.express as px
+import time
+from datetime import datetime, timedelta
+
+tickers = [
+    "ASML.AS", "NXPI", "IFX.DE", "BESI.AS",
+    "NOD.OL", "MELE.BR", "AIXA.DE", "SMHN.DE", "AWEVF"
+]
+all_data = {}
+yesterday = datetime.today() - timedelta(days=1)
+yesterday_str = yesterday.strftime('%Y-%m-%d')
+
+#Fetch data in relative time to get reliable results
+for ticker in tickers:
+    for attempt in range(3):
+        try:
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period="max", end=yesterday_str)
+            if hist is None or hist.empty:
+                display(f"No data for {ticker}, attempt {attempt+1}")
+                time.sleep(2)
+                continue
+            all_data[ticker] = hist
+            break
+        except Exception as e:
+            display(f"Error fetching {ticker}: {e}, attempt {attempt+1}")
+            time.sleep(2)
+
+#Check out ASML data as a test
+if "ASML.AS" in all_data:
+    display("ASML stocks tail")
+    display(all_data["ASML.AS"].tail())
+else:
+    display("ASML.AS data not available")
+
+#Clean and processed data for continuous time series
+processed_data = {}
+
+for ticker, df in all_data.items():
+    if df.empty:
+        continue
+    df.index = df.index.tz_localize(None) 
+    
+    df_continuous = df.asfreq('D')
+    
+    cols_to_ffill = ['Open', 'High', 'Low', 'Close', 'Adj Close']
+    existing_cols = [c for c in cols_to_ffill if c in df_continuous.columns]
+    df_continuous[existing_cols] = df_continuous[existing_cols].ffill()
+    
+    if 'Volume' in df_continuous.columns:
+        df_continuous['Volume'] = df_continuous['Volume'].fillna(0)
+    
+    processed_data[ticker] = df_continuous
+```
+## Line chart plot
+After cleaning and processing the data, the next step is to visualize the stock markets in a clean line chart. 
+Plotly offers some of the cleanest and most interactive visualization for this. There are downsides for using plotly however, the main ones being memory-heaviness and slowness. That is why it's not recommended to use plotly for large data analytics.
+```{python}
+#| label: fig-line-plot
+#| fig-cap: "Time series line plot"
+fig = go.Figure()
+for ticker, data in processed_data.items():
+    fig.add_trace(
+        go.Scatter(
+            x=data.index,
+            y=data['Close'],
+            mode='lines',
+            name=f"{ticker} Close"
+        )
+    )
+fig.update_layout(
+    title="European Semiconductor Companies - Close Prices",
+    xaxis_title="Time",
+    yaxis_title="Close Price (€ or $ depending on listing)",
+    legend_title="Company"
+)
+
+fig.show()
+```
+Also line chart plot of last 500 days.
+```{python}
+#| label: fig-line-plot2
+#| fig-cap: "Time series line plot"
+fig = go.Figure()
+for ticker, data in processed_data.items():
+    data = data.tail(500)
+    print(data['Close'].min(), data['Close'].max())
+    fig.add_trace(
+        go.Scatter(
+            x=data.index,
+            y=data['Close'],
+            mode='lines',
+            name=f"{ticker} Close"
+        )
+    )
+
+fig.update_layout(
+    title="European Semiconductor Companies - Close Prices of last 500 days",
+    xaxis_title="Time",
+    yaxis_title="Close Price (€ or $ depending on listing)",
+    legend_title="Company"
+)
+
+fig.show()
+```
+## MACD analysis
+Next is the analysis of MACD. MACD (Moving Average Convergence Divergence) is a commonly used test in financial statistics and trading.
+It reveals general trends in the stocks for buying and selling. It's a really important step in stock market analysis. 
+It's recommended to zoom in the plot to see the MACD results and candlestick plot better.
+```{python}
+#| label: fig-macd
+from plotly.subplots import make_subplots
+
+for ticker, data in all_data.items():
+    
+    data['EMA12'] = data['Close'].ewm(span=12, adjust=False).mean()
+
+    
+    data['EMA26'] = data['Close'].ewm(span=26, adjust=False).mean()
+
+    
+    data['MACD'] = data['EMA12'] - data['EMA26']
+
+    
+    data['Signal_Line'] = data['MACD'].ewm(span=9, adjust=False).mean()
+
+    
+    last_row = data.iloc[-1]
+    second_last_row = data.iloc[-2]
+
+    if second_last_row['MACD'] > second_last_row['Signal_Line'] and last_row['MACD'] < last_row['Signal_Line']:
+        print(f'{ticker}: Cross Below Signal Line → Potential Bearish Signal')
+    elif second_last_row['MACD'] < second_last_row['Signal_Line'] and last_row['MACD'] > last_row['Signal_Line']:
+        print(f'{ticker}: Cross Above Signal Line → Potential Bullish Signal')
+
+    #Print the market trends first
+    else:
+        
+        if last_row['MACD'] > last_row['Signal_Line']:
+            trend = 'Bullish Trend'
+        elif last_row['MACD'] < last_row['Signal_Line']:
+            trend = 'Bearish Trend'
+        else:
+            trend = 'Neutral / Flat'
+        print(f'{ticker}: No Crossover → {trend}')
+
+for ticker, data in all_data.items():
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.1,
+        row_heights=[0.7, 0.3],
+        subplot_titles=(f'{ticker} Price', 'MACD')
+    )
+
+    
+    fig.add_trace(go.Candlestick(
+        x=data.index,
+        open=data['Open'],
+        high=data['High'],
+        low=data['Low'],
+        close=data['Close'],
+        name='Price'
+    ), row=1, col=1)
+
+    
+    fig.add_trace(go.Scatter(
+        x=data.index,
+        y=data['MACD'],
+        mode='lines',
+        name='MACD',
+        line=dict(color='green')
+    ), row=2, col=1)
+
+    
+    fig.add_trace(go.Scatter(
+        x=data.index,
+        y=data['Signal_Line'],
+        mode='lines',
+        name='Signal Line',
+        line=dict(color='red')
+    ), row=2, col=1)
+
+    
+    macd_hist = data['MACD'] - data['Signal_Line']
+    fig.add_trace(go.Bar(
+        x=data.index,
+        y=macd_hist,
+        name='MACD Histogram',
+        marker_color=['green' if val >= 0 else 'red' for val in macd_hist],
+        opacity=0.6
+    ), row=2, col=1)
+
+    
+    fig.update_layout(
+        title=f'{ticker} Candlestick & MACD',
+        xaxis_rangeslider_visible=False,
+        legend=dict(x=0, y=1.15, orientation='h'),
+        height=700
+    )
+
+    fig.show()
+```
+## RSI analysis
+The next technical indicator analysis is RSI (Relative strength index). The indicator helps to indentify the oveerbought and oversold trends and buy and sell signals. Using both RSI and MACD is the most optimal way to figure out stock market trends for trading.
+```{python}
+#| label: fig-rsi
+from ta.momentum import RSIIndicator
+
+for ticker, data in all_data.items():
+    close_values = data['Close']
+     
+    rsi_14 = RSIIndicator(close=close_values, window=14)
+    rsi_series = rsi_14.rsi()
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=close_values.index, 
+        y=rsi_series, 
+        mode='lines', 
+        name=f'{ticker} RSI'
+    ))
+    
+    fig.add_hline(y=70, line_dash="dash", line_color="red", annotation_text="Overbought")
+    fig.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="Oversold")
+    
+    fig.update_layout(
+        title=f"RSI (14) for {ticker}",
+        xaxis_title="Date",
+        yaxis_title="RSI",
+        yaxis=dict(range=[0, 100])
+    )
+    
+    fig.show()
+```
+## GARCH model
+The GARCH (Generalized Autoregressive Conditional Heteroscedasticity) model is a popular statistical model for time series analysis, especially in trading and quantitative finance. The main application of ARCH in finance is to examine and forecast the market volatility. This is especially important for volatile and risk-averse markets like semiconductor market.
+The Q-Q-plot is an important sanity check for the market data. From the Q-Q-plot you can tell if the data aligns with a standard probablity distribution. Straight line means aligning with the distribution.
+```{python}
+#| label: fig-garch
+import statsmodels.api as sm
+import matplotlib.pyplot as plt
+from arch import arch_model
+import datetime as dt
+
+for ticker, data in all_data.items():
+    
+    returns = 100 * data['Close'].pct_change().dropna()
+    
+    # Q-Q Plot for Normality Check
+    sm.qqplot(returns, line='s')
+    plt.title(f'{ticker} Returns Q-Q Plot')
+    plt.show()
+
+    split_date = dt.datetime(2026, 2, 11) 
+
+    am = arch_model(returns, vol='Garch', p=1, q=1, dist='normal')
+    res = am.fit(update_freq=5, disp='off', last_obs=split_date,options={'ftol': 1e-4})
+    display(res.summary())
+    
+    # Residuals vs conditional volatility
+    fig = res.plot(annualize="D")
+    plt.show()
+
+    
+    fixed_res = am.fix([0.0235, 0.01, 0.06, 0.0]) #fix with parameters
+    display("Fixed results:")
+    display(fixed_res.summary())
+
+    #Compare Volatility Estimates
+    df_vol = pd.concat([res.conditional_volatility, fixed_res.conditional_volatility], axis=1)
+    df_vol.columns = ["Estimated", "Fixed"]
+    
+    ax = df_vol.plot(figsize=(7, 4))
+    ax.set_title(f"{ticker}: Estimated vs Fixed Volatility")
+    plt.show()
+    
+    #Forecasting
+    forecasts = res.forecast(horizon=5, align='origin')
+    display(forecasts.variance.dropna().head())
+    
+    forecast_vol = res.conditional_volatility * np.sqrt(252)
+
+
+    forecast_var = forecasts.variance.iloc[-1]
+    forecast_vol_annual = np.sqrt(forecast_var) * np.sqrt(252)
+
+    cond_vol_annual = res.conditional_volatility * np.sqrt(252)
+    realized_vol_annual = returns.rolling(window=5).std() * np.sqrt(252)
+
+    forecast_dates = pd.date_range(start=split_date + pd.Timedelta(days=1), periods=5, freq='B')
+    forecast_series = pd.Series(forecast_vol_annual.values, index=forecast_dates) #for plotting
+
+    plt.figure(figsize=(12, 6))
+    
+    plot_start = returns.index[max(0, len(returns)-100)]
+    
+    plt.plot(realized_vol_annual.loc[plot_start:], label='Realized Vol (5-day)', color='gray', alpha=0.3)
+    plt.plot(cond_vol_annual.loc[plot_start:split_date], label='In-Sample GARCH', color='blue')
+    
+    plt.plot(forecast_series, label='5-Day Out-of-Sample Forecast', color='red', marker='o', markersize=5)
+    
+    plt.axvline(split_date, color='black', linestyle='--', alpha=0.5)
+    plt.title(f'Volatility Forecast: {ticker}')
+    plt.ylabel('Annualized Volatility (%)')
+    plt.legend()
+    plt.grid(True, alpha=0.2)
+    plt.show()
+
+```
+## Statistical checks
+The next analysis checks the skewness and mode of the stock market data among other statistical measures. These are important for detailed understanding of the stock markets. Some analysts have debated that positive skewness is a good indicator for buying.
+The other statistical measures such as mean and standard deviation are also important for stock market analysis and can help with buy/sell decisions.
+```{python}
+#| label: fig-stats
+from scipy.stats import skew, mode
+
+for ticker, data in all_data.items():
+    close_values = data['Close']
+    close_skewness = skew(close_values)
+    close_mean = np.mean(close_values)
+    close_std = np.std(close_values)
+    close_median = np.median(close_values)
+    
+    display(f"Skewness of {ticker}:", close_skewness)
+
+    pearson_skewness = (3 * (close_mean - close_median)) / close_std
+    display(f"Pearson's Second Skewnes of {ticker}:", pearson_skewness)
+    mode_val = close_values.mode().iloc[0]
+
+    plt.figure(figsize=(8, 5))
+    sns.kdeplot(close_values)
+    plt.axvline(close_mean, label="Mean")
+    plt.axvline(close_median, color="black", label="Median")
+    plt.axvline(mode_val, color="green", label="Mode")
+    plt.title(f"Distribution of {ticker} Close Prices (Skewness)")
+    plt.xlabel("Price")
+    plt.legend()
+    plt.show()
+```
+## XGBoost
+XGBoost is the first of the ML models used in this project. XGBoost is one of the most popular gradient boosting implementations and fits expectionally well when analyzing time series data. XGBoost is a quite complicated model, so it's easier to understand the results rather than the model itself.
+The time series line plot for these models includes only 200 days of historical data for easier visualization.
+```{python}
+#| label: fig-xgboost
+import xgboost as xgb
+from sklearn.metrics import mean_squared_error
+
+colors = px.colors.qualitative.Alphabet
+
+#First it's important to go through the data and separate each feature for training
+def create_features(df, label=None):
+    df = df.copy()
+    df['date'] = df.index
+    df['date'] = pd.to_datetime(df['date'])
+    df['hour'] = df['date'].dt.hour
+    df['dayofweek'] = df['date'].dt.dayofweek
+    df['quarter'] = df['date'].dt.quarter
+    df['month'] = df['date'].dt.month
+    df['year'] = df['date'].dt.year
+    df['dayofyear'] = df['date'].dt.dayofyear
+    df['dayofmonth'] = df['date'].dt.day
+    df['weekofyear'] = df['date'].dt.isocalendar().week
+
+    X = df[['hour','dayofweek','quarter','month','year',
+           'dayofyear','dayofmonth','weekofyear']]
+    if label:
+        y = df[label]
+        return X, y
+    return X
+
+fig = go.Figure()
+for i, (ticker, data) in enumerate(processed_data.items()):
+    current_color = colors[i % len(colors)]
+    data = data.sort_index()
+    split_date = '10-Feb-2026' 
+    stock_train = data.loc[data.index <= split_date].copy()
+    stock_test = data.loc[data.index > split_date].copy()
+
+    X_train, y_train = create_features(stock_train, label='Close')
+    X_test, y_test = create_features(stock_test, label='Close')
+
+    reg = xgb.XGBRegressor(n_estimators=1000, early_stopping_rounds=50)
+    reg.fit(X_train, y_train,
+            eval_set=[(X_train, y_train), (X_test, y_test)], verbose=False)
+
+    forecast_periods = 50
+    
+    data_recent = data.tail(500).copy()
+    data_recent.index = pd.to_datetime(data_recent.index)
+    data_recent = data_recent.sort_index()
+
+    hist_x = data_recent.index
+    future_start = hist_x[-1] + pd.Timedelta(days=1)
+    future_dates = pd.date_range(start=future_start, periods=forecast_periods, freq='B')
+    future_df = pd.DataFrame(index=future_dates)
+    X_future = create_features(future_df)
+
+    forecast = reg.predict(X_future)
+
+    last_hist_date = data_recent.index[-1]
+    last_hist_close = data_recent['Close'].iloc[-1]
+
+    plot_forecast_dates = pd.Index([last_hist_date]).append(future_dates)
+    plot_forecast_values = np.concatenate(([last_hist_close], forecast))
+
+    fig.add_trace(go.Scatter(
+        x=data_recent.index,
+        y=data_recent['Close'],
+        mode='lines',
+        name=f'Historical Market Close of {ticker}',
+        line=dict(color=current_color)
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=plot_forecast_dates,
+        y=plot_forecast_values,
+        mode='lines',
+        name=f'Predicted Future Close of {ticker}',
+        line=dict(color=current_color, dash='dash')
+    ))
+    
+fig.update_layout(
+    title=f'Stock Close Price vs XGBoost Prediction',
+    xaxis_title='Date',
+    yaxis_title='Price',
+    template='plotly_white'
+)
+
+fig.show()
+```
+
+# Results
+This section is an overview of the results from the previous analysis and forecasts. Because the markets are extremely volatile and many of the stocks, mostly notably ASML, have been skyrocketing in value lately, making forecasts is difficult, as some of the stocks have already been expected to fall according to most recent data. 
+
+From the first line chart @fig-line-plot and the market trend analysis you can see which companies have the strongest trends. ASML has been performing expectionally, but their stock value is experiencing a significant decrease. The other companies have similarly volatile stocks. 
+
+From the MACD @fig-macd and RSI @fig-rsi indicator analysis it's easy to see that the markets are very volatile. THe RSI plots vary heavily between oversold and overbought for most of the companies. This makes stock market analysis especially difficult and markets heavily exposed to speculation. One of the most 'stable' markets is that of AWEVF, partly due to it being a new company. 
+
+From the GARCH model @fig-garch and related statistical analysis, you can determine the most importand trends and qualities when it comes to market volatility. In this case, the most important plots to look at are the 'estimated vs fixed volatility' and forecast plots (remember to scroll to left to see the forecast). From these plots you can make decisions for risk management, banking regulations, and derivative management. 
+
+The statistical checks are somewhat optional but measures such as skewness from @fig-stats can provide significant details about the stock markets. 
+
+Finally the project the time series forecast model, XGboost @fig-xgboost. As you can see from the graphs, the xgboost gives quite realistic forecast on the market close values. However for some of the tickers, you can see how the XGboost model might be too primitive and produce unrealistic forecasts.
+
+The goal of this project has been to provide a wide variety of tools and models for stock market analysis and forecasting that can be applied to trading, investing, portfolio management, etc. The models should not be treated as firmly accurate, but instead as experimental models. 
