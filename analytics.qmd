@@ -261,8 +261,7 @@ for ticker, data in all_data.items():
     
     fig.show()
 ```
-## GARCH model
-The GARCH (Generalized Autoregressive Conditional Heteroscedasticity) model is a popular statistical model for time series analysis, especially in trading and quantitative finance. The main application of ARCH in finance is to examine and forecast the market volatility. This is especially important for volatile and risk-averse markets like semiconductor market.
+## Q-Q-Plot
 The Q-Q-plot is an important sanity check for the market data. From the Q-Q-plot you can tell if the data aligns with a standard probablity distribution. Straight line means aligning with the distribution.
 ```{python}
 #| label: fig-garch
@@ -270,101 +269,198 @@ import statsmodels.api as sm
 import matplotlib.pyplot as plt
 from arch import arch_model
 import datetime as dt
+from scipy.stats import norm
 
 for ticker, data in all_data.items():
-    
     returns = 100 * data['Close'].pct_change().dropna()
     
-    # Q-Q Plot for Normality Check
-    sm.qqplot(returns, line='s')
-    plt.title(f'{ticker} Returns Q-Q Plot')
-    plt.show()
+    # Sort the sample
+    sorted_returns = np.sort(returns)
+    n = len(sorted_returns)
+    
+    # Compute theoretical quantiles from standard normal
+    p = (np.arange(1, n+1) - 0.5) / n
+    theoretical_quantiles = norm.ppf(p)
+    
+    # Reference line (45-degree line)
+    ref_line = [theoretical_quantiles.min(), theoretical_quantiles.max()]
+    
+    # Plot with Plotly
+    qq_fig = go.Figure()
+    
+    # Scatter points
+    qq_fig.add_trace(go.Scatter(
+        x=theoretical_quantiles,
+        y=sorted_returns,
+        mode='markers',
+        name='Data'
+    ))
+    
+    # 45-degree reference line
+    qq_fig.add_trace(go.Scatter(
+        x=ref_line,
+        y=ref_line,
+        mode='lines',
+        line=dict(color='red', dash='dash'),
+        name='Fit Line'
+    ))
+    
+    qq_fig.update_layout(
+        title=f'{ticker} Returns Q-Q Plot',
+        xaxis_title='Theoretical Quantiles',
+        yaxis_title='Sample Quantiles'
+    )
+    
+    qq_fig.show()
 
-    split_date = dt.datetime(2026, 2, 11) 
+```
+## GARCH model
+The GARCH (Generalized Autoregressive Conditional Heteroscedasticity) model is a popular statistical model for time series analysis, especially in trading and quantitative finance. The main application of ARCH in finance is to examine and forecast the market volatility. This is especially important for volatile and risk-averse markets like semiconductor market.
+```{python}
+from arch import arch_model
+split_date = dt.datetime(2026, 2, 11)
 
+for ticker, data in all_data.items():
+    returns = 100 * data['Close'].pct_change().dropna()
+    
+    # Fit GARCH(1,1)
     am = arch_model(returns, vol='Garch', p=1, q=1, dist='normal')
-    res = am.fit(update_freq=5, disp='off', last_obs=split_date,options={'ftol': 1e-4})
+    res = am.fit(update_freq=5, disp='off', last_obs=split_date, options={'ftol': 1e-4})
     display(res.summary())
     
-    # Residuals vs conditional volatility
-    fig = res.plot(annualize="D")
-    plt.show()
-
-    
-    fixed_res = am.fix([0.0235, 0.01, 0.06, 0.0]) #fix with parameters
+    # Fixed GARCH parameters
+    fixed_res = am.fix([0.0235, 0.01, 0.06, 0.0])
     display("Fixed results:")
     display(fixed_res.summary())
-
-    #Compare Volatility Estimates
+    
+    # Compare volatility estimates
     df_vol = pd.concat([res.conditional_volatility, fixed_res.conditional_volatility], axis=1)
     df_vol.columns = ["Estimated", "Fixed"]
     
-    ax = df_vol.plot(figsize=(7, 4))
-    ax.set_title(f"{ticker}: Estimated vs Fixed Volatility")
-    plt.show()
+    vol_fig = go.Figure()
+    vol_fig.add_trace(go.Scatter(x=df_vol.index, y=df_vol["Estimated"], mode='lines', name='Estimated'))
+    vol_fig.add_trace(go.Scatter(x=df_vol.index, y=df_vol["Fixed"], mode='lines', name='Fixed'))
+    vol_fig.update_layout(
+        title=f"{ticker}: Estimated vs Fixed Volatility",
+        xaxis_title="Date",
+        yaxis_title="Volatility"
+    )
+    vol_fig.show()
     
-    #Forecasting
+    # Forecasting
     forecasts = res.forecast(horizon=5, align='origin')
     display(forecasts.variance.dropna().head())
     
-    forecast_vol = res.conditional_volatility * np.sqrt(252)
-
-
     forecast_var = forecasts.variance.iloc[-1]
     forecast_vol_annual = np.sqrt(forecast_var) * np.sqrt(252)
-
+    
     cond_vol_annual = res.conditional_volatility * np.sqrt(252)
     realized_vol_annual = returns.rolling(window=5).std() * np.sqrt(252)
-
+    
     forecast_dates = pd.date_range(start=split_date + pd.Timedelta(days=1), periods=5, freq='B')
-    forecast_series = pd.Series(forecast_vol_annual.values, index=forecast_dates) #for plotting
-
-    plt.figure(figsize=(12, 6))
+    forecast_series = pd.Series(forecast_vol_annual.values, index=forecast_dates)
     
+    # Plot forecast + realized + in-sample volatility
     plot_start = returns.index[max(0, len(returns)-100)]
-    
-    plt.plot(realized_vol_annual.loc[plot_start:], label='Realized Vol (5-day)', color='gray', alpha=0.3)
-    plt.plot(cond_vol_annual.loc[plot_start:split_date], label='In-Sample GARCH', color='blue')
-    
-    plt.plot(forecast_series, label='5-Day Out-of-Sample Forecast', color='red', marker='o', markersize=5)
-    
-    plt.axvline(split_date, color='black', linestyle='--', alpha=0.5)
-    plt.title(f'Volatility Forecast: {ticker}')
-    plt.ylabel('Annualized Volatility (%)')
-    plt.legend()
-    plt.grid(True, alpha=0.2)
-    plt.show()
-
+    forecast_fig = go.Figure()
+    forecast_fig.add_trace(go.Scatter(
+        x=realized_vol_annual.loc[plot_start:].index,
+        y=realized_vol_annual.loc[plot_start:],
+        mode='lines',
+        name='Realized Vol (5-day)',
+        line=dict(color='gray'),
+        opacity=0.3
+    ))
+    forecast_fig.add_trace(go.Scatter(
+        x=cond_vol_annual.loc[plot_start:split_date].index,
+        y=cond_vol_annual.loc[plot_start:split_date],
+        mode='lines',
+        name='In-Sample GARCH',
+        line=dict(color='blue')
+    ))
+    forecast_fig.add_trace(go.Scatter(
+        x=forecast_series.index,
+        y=forecast_series.values,
+        mode='lines',
+        name='5-Day Out-of-Sample Forecast',
+        line=dict(color='red')
+    ))
+    forecast_fig.add_vline(x=split_date, line=dict(color='black', dash='dash'))
+    forecast_fig.update_layout(
+        title=f'Volatility Forecast: {ticker}',
+        yaxis_title='Annualized Volatility (%)',
+        xaxis_title='Date'
+    )
+    forecast_fig.show()
 ```
 ## Statistical checks
 The next analysis checks the skewness and mode of the stock market data among other statistical measures. These are important for detailed understanding of the stock markets. Some analysts have debated that positive skewness is a good indicator for buying.
 The other statistical measures such as mean and standard deviation are also important for stock market analysis and can help with buy/sell decisions.
 ```{python}
 #| label: fig-stats
-from scipy.stats import skew, mode
+from scipy.stats import skew, mode, gaussian_kde
 
 for ticker, data in all_data.items():
     close_values = data['Close']
-    close_skewness = skew(close_values)
-    close_mean = np.mean(close_values)
-    close_std = np.std(close_values)
-    close_median = np.median(close_values)
     
-    display(f"Skewness of {ticker}:", close_skewness)
-
-    pearson_skewness = (3 * (close_mean - close_median)) / close_std
-    display(f"Pearson's Second Skewnes of {ticker}:", pearson_skewness)
+    # Stats
+    close_mean = np.mean(close_values)
+    close_median = np.median(close_values)
     mode_val = close_values.mode().iloc[0]
-
-    plt.figure(figsize=(8, 5))
-    sns.kdeplot(close_values)
-    plt.axvline(close_mean, label="Mean")
-    plt.axvline(close_median, color="black", label="Median")
-    plt.axvline(mode_val, color="green", label="Mode")
-    plt.title(f"Distribution of {ticker} Close Prices (Skewness)")
-    plt.xlabel("Price")
-    plt.legend()
-    plt.show()
+    
+    # Use Seaborn's KDE to get values
+    kde = sns.kdeplot(close_values)  # create a temporary plot
+    kde_data = kde.get_lines()[0].get_data()  # extract x, y values
+    x_range, y_values = kde_data
+    kde.figure.clf()  # clear the temporary Seaborn figure
+    
+    # Create Plotly figure
+    fig = go.Figure()
+    
+    # KDE line
+    fig.add_trace(go.Scatter(
+        x=x_range,
+        y=y_values,
+        mode='lines',
+        name='KDE',
+        line=dict(color='blue')
+    ))
+    
+    # Vertical lines
+    fig.add_trace(go.Scatter(
+        x=[close_mean, close_mean],
+        y=[0, max(y_values)],
+        mode='lines',
+        line=dict(color='orange', dash='dash'),
+        name='Mean'
+    ))
+    fig.add_trace(go.Scatter(
+        x=[close_median, close_median],
+        y=[0, max(y_values)],
+        mode='lines',
+        line=dict(color='black', dash='dash'),
+        name='Median'
+    ))
+    fig.add_trace(go.Scatter(
+        x=[mode_val, mode_val],
+        y=[0, max(y_values)],
+        mode='lines',
+        line=dict(color='green', dash='dash'),
+        name='Mode'
+    ))
+    
+    # Layout
+    fig.update_layout(
+        title=f"Distribution of {ticker} Close Prices (Skewness)",
+        xaxis_title="Price",
+        yaxis_title="Density",
+        width=800,
+        height=500,
+        template='plotly_white',
+        legend=dict(title="Statistics")
+    )
+    
+    fig.show()
 ```
 ## XGBoost
 XGBoost is the first of the ML models used in this project. XGBoost is one of the most popular gradient boosting implementations and fits expectionally well when analyzing time series data. XGBoost is a quite complicated model, so it's easier to understand the results rather than the model itself.
