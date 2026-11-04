@@ -13,8 +13,6 @@ jupyter: python3
 This project analyzes the stock markets of major European semiconductor companies. 
 The goal of the project is to retrive financial data from yfinance and use it to forecast stock markets of the companies with time series analysis and machine learning. The results can be applied to trading and finacial decisionmaking. Note that this project itself does not provide such decisionmaking. It serves only as a general analysis and guideline. 
 
-Initially this project also featured an attempt at forecasting stock close prices with a hybrid LSTM-ARIMA model (inspired by [this paper](https://arxiv.org/abs/2406.18206)), but after many failed attempts, it was scrapped. The original paper doesn't use the model for time series forecast, but instead for trend and buy/sell signal detection. There are many other examples of LSTM being used for stock data forecast, but for a very volatile market, it might not be the best fit.
-
 ## Data cleansing
 ```{python}
 import yfinance as yf
