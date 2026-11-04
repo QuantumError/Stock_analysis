@@ -13,8 +13,8 @@ The .qmd file is the Quarto source file.
 
 Some screenshots from the working notebook html view:
 
-[1](img/Screenshot(147).png)
-[2](img/Screenshot(148).png)
-[3](img/Screenshot(149).png)
-[4](img/Screenshot(150).png)
-[5](img/Screenshot2026-11-04130035.png)
+![1](img/Screenshot(147).png)
+![2](img/Screenshot(148).png)
+![3](img/Screenshot(149).png)
+![4](img/Screenshot(150).png)
+![5](img/Screenshot2026-11-04130035.png)
